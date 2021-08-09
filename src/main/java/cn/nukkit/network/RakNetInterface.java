@@ -53,7 +53,6 @@ public class RakNetInterface implements RakNetServerListener, AdvancedSourceInte
 
     private final Queue<NukkitRakNetSession> sessionCreationQueue = PlatformDependent.newMpscQueue();
 
-
     private final Set<ScheduledFuture<?>> tickFutures = new HashSet<>();
 
     private final FastThreadLocal<Set<NukkitRakNetSession>> sessionsToTick = new FastThreadLocal<Set<NukkitRakNetSession>>() {
@@ -253,6 +252,12 @@ public class RakNetInterface implements RakNetServerListener, AdvancedSourceInte
     }
 
     @RequiredArgsConstructor
+    class PacketSettings {
+        final RakNetPriority priority;
+        final RakNetReliability reliability;
+    }
+
+    @RequiredArgsConstructor
     private class NukkitRakNetSession implements RakNetSessionListener {
         private final RakNetServerSession raknet;
         private final Queue<DataPacket> inbound = PlatformDependent.newSpscQueue();
@@ -310,7 +315,7 @@ public class RakNetInterface implements RakNetServerListener, AdvancedSourceInte
                         toBatch.clear();
                     }
 
-                    this.sendPacket(((BatchPacket) packet).payload);
+                    this.sendPacket(((BatchPacket) packet).payload, packet.priority, packet.reliability);
                 } else {
                     toBatch.add(packet);
                 }
@@ -322,27 +327,41 @@ public class RakNetInterface implements RakNetServerListener, AdvancedSourceInte
         }
 
         private void sendPackets(Collection<DataPacket> packets) {
-            BinaryStream batched = new BinaryStream();
+            Map<PacketSettings, BinaryStream> byPriority = new HashMap<>();
+            byPriority.put(new PacketSettings(DataPacket.DEFAULT_PRIORITY, DataPacket.DEFAULT_RELIABILITY), new BinaryStream());
+
             for (DataPacket packet : packets) {
                 Preconditions.checkArgument(!(packet instanceof BatchPacket), "Cannot batch BatchPacket");
                 Preconditions.checkState(packet.isEncoded, "Packet should have already been encoded");
+
                 byte[] buf = packet.getBuffer();
+
+                PacketSettings mySettings = new PacketSettings(packet.priority, packet.reliability);
+
+                BinaryStream batched;
+                if ((batched = byPriority.get(mySettings)) == null) {
+                    batched = new BinaryStream();
+                    byPriority.put(mySettings, batched);
+                }
+
                 batched.putUnsignedVarInt(buf.length);
                 batched.put(buf);
             }
 
-            try {
-                this.sendPacket(Network.deflateRaw(batched.getBuffer(), network.getServer().networkCompressionLevel));
-            } catch (IOException e) {
-                log.error("Unable to compress batched packets", e);
+            for (Map.Entry<PacketSettings, BinaryStream> entry : byPriority.entrySet()) {
+                try {
+                    this.sendPacket(Network.deflateRaw(entry.getValue().getBuffer(), network.getServer().networkCompressionLevel), entry.getKey().priority, entry.getKey().reliability);
+                } catch (IOException e) {
+                    log.error("Unable to compress batched packets", e);
+                }
             }
         }
 
-        private void sendPacket(byte[] payload) {
+        private void sendPacket(byte[] payload, RakNetPriority priority, RakNetReliability reliability) {
             ByteBuf byteBuf = ByteBufAllocator.DEFAULT.ioBuffer(1 + payload.length);
             byteBuf.writeByte(0xfe);
             byteBuf.writeBytes(payload);
-            this.raknet.send(byteBuf);
+            this.raknet.send(byteBuf, priority, reliability);
         }
     }
 }
