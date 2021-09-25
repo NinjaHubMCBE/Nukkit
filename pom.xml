@@ -17,6 +17,13 @@
         <jline.version>3.9.0</jline.version>
     </properties>
 
+    <distributionManagement>
+        <repository>
+            <id>ninjahub-main</id>
+            <url>https://mvn.ninjahub.net/repository/main/</url>
+        </repository>
+    </distributionManagement>
+
     <repositories>
         <repository>
             <id>opencollab-repo-release</id>
